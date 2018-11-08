@@ -9,6 +9,9 @@
 //#include "iolibrary.h"
 #include "csonar.h"
 
+CSONAR_DEFINE_TAINT_SOURCE(iot);
+CSONAR_DEFINE_ATTRIBUTE(int);
+
 //Joystick and PCF8591T Parameters
 #define address 0x48        //pcf8591 default address
 #define pinbase 64          //any number above 64
@@ -32,6 +35,14 @@
 
 using namespace std;
 
+void communicate  (int pin, int value) {
+	csonar_taint_sink(csonar_taint_source_any(), value, "IoT injection", "CWE:74", csws_security);
+	softPwmWrite(pin, value);
+}
+
+int taint(int value) {
+	return csonar_taint_union2(value, csonar_taint_source_iot());
+}
 
 //setup wiringpi
 JNIEXPORT jint JNICALL Java_JoyCar_initializeWiringPi(JNIEnv *env, jobject o){
@@ -50,60 +61,43 @@ JNIEXPORT void JNICALL Java_JoyCar_initializePCF8591(JNIEnv *env, jobject o){
 	pcf8591Setup(pinbase,address);
 
 }
+
+int readAnalog(int pin) {
+	return taint(analogRead(pin));
+}
+
+int readDigital(int pin) {
+	return taint(digitalRead(pin));
+}
+
 //code for joystick
 JNIEXPORT jint JNICALL Java_JoyCar_readUpDown(JNIEnv *env, jobject o){
-  return analogRead(A1);
+  return readAnalog(A1);
 }
 
 JNIEXPORT jint JNICALL Java_JoyCar_readLeftRight(JNIEnv *env, jobject o){
-	return analogRead(A0);
+	return readAnalog(A0);
 }
 JNIEXPORT jboolean JNICALL Java_JoyCar_isButtonPressed(JNIEnv *env, jobject o){
-  return digitalRead(Z_Pin)==0;
+  return readDigital(Z_Pin)==0;
 }
 //code for servo
 long map(long value,long fromLow,long fromHigh,long toLow,long toHigh){
-    return (toHigh-toLow)*(value-fromLow) / (fromHigh-fromLow) + toLow;
+    int result = (toHigh-toLow)*(value-fromLow) / (fromHigh-fromLow) + toLow;
+    csonar_taint_clear_int(&result);
+    return result;
 }
 void servoInit(int pin){        //initialization function for servo PMW pin
     softPwmCreate(pin,  0, 200);
 }
 
 
-
-
-void softPwmWrite2  (int pin, char * value) {
-	csonar_taint_sink(csonar_taint_source_any(),
-
-	*value,
-
-	"Tainted Input to print_important_data",
-
-	"CWE:20",
-
-	csws_security);
-}
-
-void foo(int angle, char * angle2){    //Specif a certain rotation angle (0-180) for the servo
-	int taintunion = csonar_taint_union2(csonar_string_taint(angle2),	csonar_taint_source_generic());
-
-	*angle2 = taintunion;
-
+JNIEXPORT void JNICALL Java_JoyCar_turnAtAngle(JNIEnv *env, jobject o, jint angle){    //Specify a certain rotation angle (0-180) for the servo
 	if(angle > 180)
         angle = 180;
     if(angle < 0)
         angle = 0;
-    softPwmWrite(servoPin,map(angle,0,180,SERVO_MIN_MS,SERVO_MAX_MS));
-    softPwmWrite2(servoPin, angle2);
-    delay(100);
-}
-
-JNIEXPORT void JNICALL Java_JoyCar_turnAtAngle(JNIEnv *env, jobject o, jint angle){    //Specif a certain rotation angle (0-180) for the servo
-	if(angle > 180)
-        angle = 180;
-    if(angle < 0)
-        angle = 0;
-    softPwmWrite(servoPin,map(angle,0,180,SERVO_MIN_MS,SERVO_MAX_MS));
+    communicate(servoPin,map(angle,0,180,SERVO_MIN_MS,SERVO_MAX_MS));
     delay(100);
 }
 
@@ -113,7 +107,7 @@ void servoWriteMS(int pin, int ms){     //specific the unit for pulse(5-25ms) wi
         ms = SERVO_MAX_MS;
     if(ms < SERVO_MIN_MS)
         ms = SERVO_MIN_MS;
-    softPwmWrite(pin,ms);
+    communicate(pin,ms);
 }
 
 JNIEXPORT void JNICALL Java_JoyCar_initializeServo(JNIEnv *env, jobject o){
@@ -156,7 +150,7 @@ void motor(int ADC){
 		digitalWrite(motorPin2,LOW);
 		printf("Motor Stop...\n");
 	}
-	softPwmWrite(enablePin,map(abs(value),0,130,0,255));
+	communicate(enablePin,map(abs(value),0,130,0,255));
 	printf("The PWM duty cycle is %d%%\n",abs(value)*100/127);//print the PMW duty cycle
 }
 
@@ -169,7 +163,15 @@ JNIEXPORT void JNICALL Java_JoyCar_initializeMotor(JNIEnv *env, jobject o){
 
 
 JNIEXPORT void JNICALL Java_JoyCar_runMotor(JNIEnv *env, jobject o, jint val){
+	val = taint(val);
 	printf("ADC value : %d \n",val);
 	motor(val);		//start the motor
 	delay(100);
+}
+
+
+void stub(JNIEnv *env, jobject obj) {
+	csonar_taint_sink(csonar_taint_source_any(), Java_JoyCar_readUpDown(env, obj), "Tainted IoT Input", "CWE:74", csws_security);
+	csonar_taint_sink(csonar_taint_source_any(), Java_JoyCar_readLeftRight(env, obj), "Tainted IoT Input", "CWE:74", csws_security);
+	csonar_taint_sink(csonar_taint_source_any(), Java_JoyCar_isButtonPressed(env, obj), "Tainted IoT Input", "CWE:74", csws_security);
 }
